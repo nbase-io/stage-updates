@@ -73,7 +73,8 @@ try {
     Start-Sleep 5
     $setup = Start-Process "$root\setup.exe" -ArgumentList '/S', '/STAGECLIPUPDATE' -PassThru
     Start-Sleep 2
-    StopClip
+    Start-Process $app -ArgumentList '--stageupdater-quit' -Wait
+    if (-not $old.WaitForExit(40000)) { throw 'Old StageClip did not quit for setup' }
     if (-not $setup.WaitForExit(120000)) { throw 'Setup timed out' }
     if ($setup.ExitCode -ne 0) { throw "Setup exit code $($setup.ExitCode)" }
     WaitFor 'setup installs requested version' { (Test-Path $app) -and (VersionOf $app) -eq $Version }
