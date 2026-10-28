@@ -1,10 +1,13 @@
-param([string]$Version = '1.2.3')
+param([string]$Version = '1.2.4', [ValidateSet('x64','arm64')][string]$Arch = 'x64')
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid version' }
 $root = 'C:\stageclip-update-test'
 $evidence = "$root\evidence"
 New-Item -ItemType Directory -Force $evidence | Out-Null
 Start-Transcript "$evidence\verification.txt"
+$nativeArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+if ($nativeArch -ne $Arch) { throw "Expected native $Arch, got $nativeArch" }
+Write-Host "Native Windows architecture: $nativeArch"
 $base = 'https://github.com/nbase-io/stage-updates/releases/download'
 $env:STAGECLIP_API_URL = 'http://127.0.0.1:1'
 $install = "$env:LOCALAPPDATA\Programs\StageClip"
@@ -16,6 +19,13 @@ function Fetch($url, $destination) {
     if ((Get-Item $destination).Length -eq 0) { throw "Empty file: $url" }
 }
 function VersionOf($file) { return (Get-Item $file).VersionInfo.ProductVersion.Split('+')[0] }
+function VerifyMachine($file) {
+    $bytes = [IO.File]::ReadAllBytes($file)
+    $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+    $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+    $expected = if ($Arch -eq 'arm64') { 0xAA64 } else { 0x8664 }
+    if ($machine -ne $expected) { throw "Wrong executable architecture: $file ($machine)" }
+}
 function WaitFor($description, [scriptblock]$condition, $seconds = 120) {
     $until = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $until) {
@@ -40,11 +50,11 @@ function RestoreBaseline {
 }
 
 try {
-    Fetch "$base/stageclip-windows-v1.2.2/StageClip-1.2.2-win-x64.zip" "$root\baseline.zip"
-    Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-x64.zip" "$root\StageClip-$Version-win-x64.zip"
-    Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-x64-setup.exe" "$root\setup.exe"
-    Fetch "$base/stageclip-windows-v$Version/stageclip-windows-update-test.feed.json" "$root\feed.json"
-    Fetch "$base/stageupdater-windows-v1.0.2/StageUpdater-Setup-x64.exe" "$root\updater-setup.exe"
+    Fetch "$base/stageclip-windows-v1.2.2/StageClip-1.2.2-win-$Arch.zip" "$root\baseline.zip"
+    Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-$Arch.zip" "$root\StageClip-$Version-win-$Arch.zip"
+    Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-$Arch-setup.exe" "$root\setup.exe"
+    Fetch "$base/stageclip-windows-v$Version/stageclip-windows-update-test-$Arch.feed.json" "$root\feed.json"
+    Fetch "$base/stageupdater-windows-v1.0.2/StageUpdater-Setup-$Arch.exe" "$root\updater-setup.exe"
 
     # The fixture is signed with the production feed key; it contains only this product and local test assets.
     New-Item 'HKLM:\Software\StageUpdater' -Force | Out-Null
@@ -52,6 +62,7 @@ try {
     $setup = Start-Process "$root\updater-setup.exe" -ArgumentList '/S' -Wait -PassThru
     if ($setup.ExitCode -ne 0 -or -not (Test-Path $updater)) { throw 'Updater install failed' }
     WaitFor 'StageUpdater service running' { (Get-Service StageUpdater).Status -eq 'Running' } 30
+    VerifyMachine $updater
     if (-not (Get-ItemProperty 'HKLM:\Software\Classes\stageupdater\shell\open\command')) { throw 'Missing protocol' }
 
     RestoreBaseline
@@ -72,6 +83,7 @@ try {
     Start-Sleep 5
     Start-Process $updater
     WaitFor 'signed-feed idle update installs new version' { (Test-Path $app) -and (VersionOf $app) -eq $Version }
+    VerifyMachine $app
     WaitFor 'updated StageClip restarts automatically' {
         @(Get-Process StageClip -ErrorAction SilentlyContinue | Where-Object Id -ne $old.Id).Count -gt 0
     }
@@ -92,9 +104,19 @@ try {
     if (-not $setup.WaitForExit(120000)) { throw 'Setup timed out' }
     if ($setup.ExitCode -ne 0) { throw "Setup exit code $($setup.ExitCode)" }
     WaitFor 'setup installs requested version' { (Test-Path $app) -and (VersionOf $app) -eq $Version }
+    VerifyMachine $app
     WaitFor 'setup relaunches StageClip' { @(Get-Process StageClip -ErrorAction SilentlyContinue).Count -gt 0 }
     if ((Get-Content "$env:LOCALAPPDATA\StageClip\update-preservation-check.txt") -ne 'preserve this data') { throw 'App data lost' }
-    @{ version = VersionOf $app; updaterService = (Get-Service StageUpdater).Status.ToString();
+    if ([version]$Version -ge [version]'1.2.4') {
+        StopClip
+        Remove-Item "$env:LOCALAPPDATA\StageClip\settings.json" -ErrorAction SilentlyContinue
+        $cold = Start-Process $app -ArgumentList '--background' -PassThru
+        Start-Sleep 5
+        Start-Process $app -ArgumentList '--stageupdater-quit' -Wait
+        if (-not $cold.WaitForExit(30000)) { throw 'Never-shown new app did not quit' }
+        Write-Host 'PASS: fresh background launch quits without saving undefined window coordinates'
+    }
+    @{ version = VersionOf $app; architecture = $nativeArch; updaterService = (Get-Service StageUpdater).Status.ToString();
        idleUpdate = 'passed'; setupUpdate = 'passed'; dataPreserved = $true } |
         ConvertTo-Json | Set-Content "$evidence\result.json"
     Write-Host 'PASS: both real Windows update paths, restart, service and data preservation'
