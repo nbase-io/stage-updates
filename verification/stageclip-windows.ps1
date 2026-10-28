@@ -33,6 +33,10 @@ function RestoreBaseline {
     if (Test-Path $install) { Remove-Item $install -Recurse -Force }
     Expand-Archive "$root\baseline.zip" "$env:LOCALAPPDATA\Programs" -Force
     if ((VersionOf $app) -ne '1.2.2') { throw 'Baseline version mismatch' }
+    # 1.2.2 saves NaN when quitting a never-shown window. Model an existing user's previously opened window.
+    New-Item "$env:LOCALAPPDATA\StageClip" -ItemType Directory -Force | Out-Null
+    '{"WindowBounds":{"Left":100,"Top":100,"Width":1100,"Height":760,"Maximized":false}}' |
+        Set-Content "$env:LOCALAPPDATA\StageClip\settings.json"
 }
 
 try {
