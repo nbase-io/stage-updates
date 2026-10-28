@@ -1,4 +1,4 @@
-param([string]$Version = '1.2.4', [ValidateSet('x64','arm64')][string]$Arch = 'x64')
+param([string]$Version = '1.2.4', [ValidateSet('x64','arm64')][string]$Arch = 'x64', [switch]$PublicFeed)
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid version' }
 $root = 'C:\stageclip-update-test'
@@ -51,14 +51,18 @@ function RestoreBaseline {
 
 try {
     Fetch "$base/stageclip-windows-v1.2.2/StageClip-1.2.2-win-$Arch.zip" "$root\baseline.zip"
-    Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-$Arch.zip" "$root\StageClip-$Version-win-$Arch.zip"
+    if (-not $PublicFeed) {
+        Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-$Arch.zip" "$root\StageClip-$Version-win-$Arch.zip"
+        Fetch "$base/stageclip-windows-v$Version/stageclip-windows-update-test-$Arch.feed.json" "$root\feed.json"
+    }
     Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-$Arch-setup.exe" "$root\setup.exe"
-    Fetch "$base/stageclip-windows-v$Version/stageclip-windows-update-test-$Arch.feed.json" "$root\feed.json"
     Fetch "$base/stageupdater-windows-v1.0.2/StageUpdater-Setup-$Arch.exe" "$root\updater-setup.exe"
 
     # The fixture is signed with the production feed key; it contains only this product and local test assets.
     New-Item 'HKLM:\Software\StageUpdater' -Force | Out-Null
-    Set-ItemProperty 'HKLM:\Software\StageUpdater' FeedUrl 'file:///C:/stageclip-update-test/feed.json'
+    $feedUrl = if ($PublicFeed) { 'https://nbase-io.github.io/stage-updates/feed.json' } else { 'file:///C:/stageclip-update-test/feed.json' }
+    Set-ItemProperty 'HKLM:\Software\StageUpdater' FeedUrl $feedUrl
+    Write-Host "Update feed: $feedUrl"
     $setup = Start-Process "$root\updater-setup.exe" -ArgumentList '/S' -Wait -PassThru
     if ($setup.ExitCode -ne 0 -or -not (Test-Path $updater)) { throw 'Updater install failed' }
     WaitFor 'StageUpdater service running' { (Get-Service StageUpdater).Status -eq 'Running' } 30
@@ -115,9 +119,22 @@ try {
         Start-Process $app -ArgumentList '--stageupdater-quit' -Wait
         if (-not $cold.WaitForExit(30000)) { throw 'Never-shown new app did not quit' }
         Write-Host 'PASS: fresh background launch quits without saving undefined window coordinates'
+
+        # The setup can also recover a 1.2.2 login-only installation affected by the old quit bug.
+        RestoreBaseline
+        Remove-Item "$env:LOCALAPPDATA\StageClip\settings.json" -ErrorAction SilentlyContinue
+        $legacy = Start-Process $app -ArgumentList '--background' -PassThru
+        Start-Sleep 5
+        $repair = Start-Process "$root\setup.exe" -ArgumentList '/S', '/STAGECLIPUPDATE' -PassThru
+        if (-not $repair.WaitForExit(120000) -or $repair.ExitCode -ne 0) { throw 'Legacy cold-start setup recovery failed' }
+        if (-not $legacy.HasExited) { throw 'Legacy app remains after setup recovery' }
+        WaitFor 'setup recovers old never-shown app and relaunches fixed version' {
+            (VersionOf $app) -eq $Version -and @(Get-Process StageClip -ErrorAction SilentlyContinue).Count -gt 0
+        }
+        if ((Get-Content "$env:LOCALAPPDATA\StageClip\update-preservation-check.txt") -ne 'preserve this data') { throw 'App data lost during recovery' }
     }
     @{ version = VersionOf $app; architecture = $nativeArch; updaterService = (Get-Service StageUpdater).Status.ToString();
-       idleUpdate = 'passed'; setupUpdate = 'passed'; dataPreserved = $true } |
+       idleUpdate = 'passed'; setupUpdate = 'passed'; dataPreserved = $true; publicFeed = [bool]$PublicFeed } |
         ConvertTo-Json | Set-Content "$evidence\result.json"
     Write-Host 'PASS: both real Windows update paths, restart, service and data preservation'
 }
