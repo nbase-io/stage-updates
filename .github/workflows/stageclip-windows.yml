@@ -1,0 +1,26 @@
+name: StageClip Windows update verification
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: StageClip version under test
+        required: true
+        default: '1.2.3'
+permissions:
+  contents: read
+jobs:
+  update:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install, update while idle, restart, and verify setup fallback
+        shell: pwsh
+        env:
+          UPDATE_VERSION: ${{ inputs.version }}
+        run: verification/stageclip-windows.ps1 -Version $env:UPDATE_VERSION
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: StageClip-update-evidence
+          path: C:/stageclip-update-test/evidence/*
