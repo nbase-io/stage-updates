@@ -6,6 +6,10 @@ on:
         description: StageClip version under test
         required: true
         default: '1.2.4'
+      public_feed:
+        description: Verify the live production feed and HTTPS asset download
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -27,7 +31,8 @@ jobs:
         env:
           UPDATE_VERSION: ${{ inputs.version }}
           UPDATE_ARCH: ${{ matrix.arch }}
-        run: verification/stageclip-windows.ps1 -Version $env:UPDATE_VERSION -Arch $env:UPDATE_ARCH
+          PUBLIC_FEED: ${{ inputs.public_feed }}
+        run: verification/stageclip-windows.ps1 -Version $env:UPDATE_VERSION -Arch $env:UPDATE_ARCH -PublicFeed:($env:PUBLIC_FEED -eq 'true')
       - uses: actions/upload-artifact@v4
         if: always()
         with:
