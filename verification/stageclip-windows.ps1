@@ -40,7 +40,7 @@ try {
     Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-x64.zip" "$root\StageClip-$Version-win-x64.zip"
     Fetch "$base/stageclip-windows-v$Version/StageClip-$Version-win-x64-setup.exe" "$root\setup.exe"
     Fetch "$base/stageclip-windows-v$Version/stageclip-windows-update-test.feed.json" "$root\feed.json"
-    Fetch "$base/stageupdater-latest/StageUpdater-Setup-x64.exe" "$root\updater-setup.exe"
+    Fetch "$base/stageupdater-windows-v1.0.1/StageUpdater-Setup-x64.exe" "$root\updater-setup.exe"
 
     # The fixture is signed with the production feed key; it contains only this product and local test assets.
     New-Item 'HKLM:\Software\StageUpdater' -Force | Out-Null
