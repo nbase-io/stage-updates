@@ -56,6 +56,16 @@ try {
     $old = Start-Process $app -ArgumentList '--background' -PassThru
     Start-Sleep 5
     if ($old.HasExited) { throw 'Baseline did not stay running' }
+    $event = $null
+    $eventExists = [System.Threading.EventWaitHandle]::TryOpenExisting('StageClip.QuitForUpdate', [ref]$event)
+    Write-Host "Baseline update quit event exists: $eventExists"
+    if ($event) { $event.Dispose() }
+    $quit = Start-Process $app -ArgumentList '--stageupdater-quit' -PassThru
+    if (-not $quit.WaitForExit(30000)) { throw 'Quit command did not exit' }
+    if (-not $old.WaitForExit(30000)) { throw 'Baseline does not honor the update quit request' }
+    Write-Host 'PASS: old StageClip honors graceful update quit'
+    $old = Start-Process $app -ArgumentList '--background' -PassThru
+    Start-Sleep 5
     Start-Process $updater
     WaitFor 'signed-feed idle update installs new version' { (Test-Path $app) -and (VersionOf $app) -eq $Version }
     WaitFor 'updated StageClip restarts automatically' {
